@@ -79,6 +79,7 @@
       <button id="btnInfo" class="secondary" disabled>Cihaz bilgisi (0x03)</button>
       <button id="btnSys" class="secondary" disabled>Sistem bilgisi (0x07)</button>
     </div>
+    <button id="btnBattery" class="secondary" disabled style="margin-bottom:10px">Pil</button>
     <table id="info"><tr><td>Durum</td><td>Henüz sorgulanmadı</td></tr></table>
   </section>
 
@@ -106,8 +107,13 @@ const RCSP_WRITE   = "0000ae01-0000-1000-8000-00805f9b34fb";
 const RCSP_NOTIFY  = "0000ae02-0000-1000-8000-00805f9b34fb";
 const NUS_SERVICE  = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 
-// Saati bozabilecek komutlar - elle gönderilemez
-const BLOCKED = new Set([0x06, 0x1F, 0x22, 0x23, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8]);
+// Saati bozabilecek komutlar - elle gönderilemez (kodlar APK'daki jl_rcsp Command sınıfından)
+// 06 BT kopar, 08 sistem ayarı yaz, 1A flash IO, 1B-1E/16-18/28 dosya aktarımı, 1F/23 dosya sil,
+// 22 biçimlendir, D1 MTU ayarla, D8 depolama ayarla, E1-E8 OTA/yeniden başlat
+const BLOCKED = new Set([
+  0x06, 0x08, 0x16, 0x17, 0x18, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x22, 0x23, 0x28,
+  0xD1, 0xD8, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8,
+]);
 
 // ─────────────────────────────── yardımcılar
 const $ = (id) => document.getElementById(id);
@@ -132,7 +138,7 @@ function setState(text, kind) {
   $("state").textContent = text;
   $("dot").className = "dot " + (kind || "");
   const ready = kind === "ok";
-  for (const id of ["btnInfo", "btnSys", "btnSend"]) $(id).disabled = !ready;
+  for (const id of ["btnInfo", "btnSys", "btnBattery", "btnSend"]) $(id).disabled = !ready;
   $("btnDisconnect").disabled = !device;
   $("btnConnect").disabled = !!device;
 }
@@ -242,17 +248,36 @@ function showTable(rows) {
 
 const STATUS = { 0: "başarılı", 1: "hata", 2: "parametre hatası / desteklenmiyor" };
 
-function showResult(title, res) {
+// GET_TARGET_INFO alan adları - APK'daki com.jieli.jl_rcsp.constant.AttrAndFunCode'dan
+const TARGET_ATTR = {
+  0x00: "Protokol sürümü", 0x01: "Açılış sistem bilgisi", 0x02: "Klasik BT adresi",
+  0x03: "Platform", 0x04: "Fonksiyon bilgisi", 0x05: "Firmware bilgisi", 0x06: "SDK tipi",
+  0x07: "Uboot sürümü", 0x08: "Çift yedek desteği", 0x09: "Zorunlu güncelleme",
+  0x0A: "VID / PID", 0x0B: "Doğrulama anahtarı", 0x0C: "Proje kodu", 0x0D: "Protokol MTU",
+  0x0E: "Bağlantıya izin", 0x10: "Cihaz adı", 0x11: "Sadece BLE / BLE adresi",
+  0x12: "Periferik desteği", 0x13: "Desteklenen fonksiyonlar", 0x14: "Kayıt dosya aktarımı",
+  0x15: "Dosya aktarımı", 0x1F: "Özel sürüm",
+};
+// GET_SYS_INFO, PUBLIC (0xFF) grubu alan adları
+const SYS_PUBLIC_ATTR = { 0x00: "Pil", 0x01: "Ses seviyesi", 0x02: "Müzik cihaz durumu", 0x03: "Hata", 0x04: "EQ", 0x05: "Dosya tipi", 0x06: "Aktif mod", 0x07: "Işık", 0x08: "FM verici" };
+
+// skip: TLV'den önce atlanacak bayt sayısı (sistem bilgisinde ilk bayt fonksiyon grubu)
+function showResult(title, res, names = TARGET_ATTR, skip = 0) {
   const rows = [["Komut", title], ["Durum", `${res.status} (${STATUS[res.status] ?? "bilinmiyor"})`]];
   if (res.status === 0) {
-    for (const it of parseTLV(res.data)) {
+    if (skip) rows.push(["Grup", `0x${res.data[0]?.toString(16).padStart(2, "0")}`, true]);
+    for (const it of parseTLV(res.data.slice(skip))) {
       let v = hex(it.value);
       // Tip 0x02 (klasik BT) ve 0x11 (BLE) adres taşıyor - saatin adresiyle doğrulandı
       const addr = it.type === 0x02 ? it.value.slice(0, 6) : it.type === 0x11 ? it.value.slice(1, 7) : null;
       if (addr && addr.length === 6) {
         v += "   → adres " + Array.from(addr, (x) => x.toString(16).padStart(2, "0")).join(":").toUpperCase();
       }
-      rows.push([`Tip 0x${it.type.toString(16).padStart(2, "0")}`, v, true]);
+      const typeHex = `0x${it.type.toString(16).padStart(2, "0")}`;
+      if (names === SYS_PUBLIC_ATTR && it.type === 0x00 && it.value.length) {
+        v += `   → %${it.value[0]}`;
+      }
+      rows.push([names[it.type] ? `${names[it.type]} (${typeHex})` : `Tip ${typeHex}`, v, true]);
     }
   }
   rows.push(["Ham veri", hex(res.data), true]);
@@ -293,10 +318,10 @@ async function connect() {
   }
 }
 
-async function run(title, op, params) {
+async function run(title, op, params, names, skip) {
   try {
     const res = await rcsp(op, params);
-    showResult(title, res);
+    showResult(title, res, names, skip);
   } catch (e) {
     log("HATA: " + e.message, "er");
   }
@@ -305,7 +330,9 @@ async function run(title, op, params) {
 $("btnConnect").onclick = connect;
 $("btnDisconnect").onclick = () => device?.gatt.disconnect();
 $("btnInfo").onclick = () => run("GET_TARGET_INFO (0x03)", 0x03, fromHex("FFFFFFFF00"));
-$("btnSys").onclick = () => run("GET_SYS_INFO (0x07)", 0x07, fromHex("FF00000004"));
+// Sistem bilgisi parametresi: [grup][4 baytlık alan maskesi, big-endian]. Grup 0xFF = PUBLIC.
+$("btnSys").onclick = () => run("GET_SYS_INFO (0x07)", 0x07, fromHex("FF000001FF"), SYS_PUBLIC_ATTR, 1);
+$("btnBattery").onclick = () => run("Pil (0x07, PUBLIC alan 0)", 0x07, fromHex("FF00000001"), SYS_PUBLIC_ATTR, 1);
 $("btnSend").onclick = () => {
   try {
     const op = parseInt($("op").value, 16);
