@@ -247,9 +247,10 @@ function showResult(title, res) {
   if (res.status === 0) {
     for (const it of parseTLV(res.data)) {
       let v = hex(it.value);
-      // 6 baytlık değerler Bluetooth adresi olabilir
-      if (it.value.length === 6 || (it.value.length === 8 && it.type === 2)) {
-        v += "   → adres? " + Array.from(it.value.slice(0, 6), (x) => x.toString(16).padStart(2, "0")).join(":").toUpperCase();
+      // Tip 0x02 (klasik BT) ve 0x11 (BLE) adres taşıyor - saatin adresiyle doğrulandı
+      const addr = it.type === 0x02 ? it.value.slice(0, 6) : it.type === 0x11 ? it.value.slice(1, 7) : null;
+      if (addr && addr.length === 6) {
+        v += "   → adres " + Array.from(addr, (x) => x.toString(16).padStart(2, "0")).join(":").toUpperCase();
       }
       rows.push([`Tip 0x${it.type.toString(16).padStart(2, "0")}`, v, true]);
     }
