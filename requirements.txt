@@ -1,0 +1,2 @@
+bleak>=1.0
+androguard>=4.1   # sadece apk_sabitleri.py için

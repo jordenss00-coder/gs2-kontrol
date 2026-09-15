@@ -1,0 +1,17 @@
+# Kişisel / cihaza özel
+CLAUDE.local.md
+
+# Araç çıktıları (cihaz adresi içerir)
+qcy_log_*.txt
+qcy_frames_*.json
+qcy_gatt_*.json
+
+# Üçüncü taraf ikili dosyalar
+*.apk
+*.so
+*.dex
+
+# Python
+__pycache__/
+*.pyc
+.venv/
