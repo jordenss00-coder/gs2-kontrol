@@ -15,3 +15,22 @@ qcy_gatt_*.json
 __pycache__/
 *.pyc
 .venv/
+
+# Deney/tarama ciktilari (cihaz adresi icerir)
+tarama_*.json
+tarama_*.txt
+sma_2*.json
+sma_2*.txt
+deney_*.json
+deney_*.txt
+deney_*.py
+
+# APK'dan cozulmus kod dokumleri (ucuncu taraf, depoya konmaz)
+blekey_src.txt
+filebrowse.txt
+rcsp_paramlar.txt
+sma_connector.txt
+sma_connect_flow.txt
+sma_crc.txt
+sma_factory.txt
+sma_launch.txt
