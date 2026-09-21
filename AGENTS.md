@@ -160,15 +160,76 @@ Diğer adlar: 03 PLATFORM, 0B AUTH_KEY, 0C PROJECT_CODE, 0E ALLOW_CONNECT, 10 NA
 - WATCH_OP (kadran): 0 GET, 1 SET, 2 NOTIFY, 3 GET_VERSION, 4 ENABLE_CUSTOM, 5 GET_CUSTOM_BG.
 - `02`, `D6`, `D9` parametresiz gönderilince status 02 döndü → doğru parametre gerekiyor.
 
+## SMA (com.szabh.smable3) kanalı — çözüldü ama saat cevap vermiyor
+
+Çerçeve biçimi APK'daki `MessageFactory.create()`'ten birebir çıkarıldı:
+
+```
+AB | bayrak | uzunluk(2,BE) | crc16(2,BE) | komut | anahtar | anahtarBayrağı | veri...
+uzunluk = veri + 3 ; crc = CRC-16/ARC (poly 0xA001, init 0), 6. bayttan sona kadar
+bayrak: create içinde her zaman |1 → 0x01  (bit4 = cevap bekleniyor, bit5 = nack)
+BleCommand: UPDATE=1 SET=2 CONNECT=3 PUSH=4 DATA=5 CONTROL=6 IO=7
+BleKeyFlag: UPDATE=0x00 READ=0x10 READ_CONTINUE=0x11 CREATE=0x20 DELETE=0x30 RESET=0x40
+BleKey 16 bit: üst bayt = komut, alt bayt = anahtar (POWER=0x0203 → komut 02, anahtar 03)
+```
+
+- 301 anahtarın tam listesi: `sma_anahtarlari.txt`. POWER=0x0203 (pil), ACTIVITY=0x0502,
+  HEART_RATE=0x0503, SLEEP=0x0505, BLOOD_OXYGEN=0x0509, WATCH_FACE=0x0701.
+- CRC tablomuz APK'daki 256 değerle birebir aynı; ürettiğimiz paket APK'nın kendi
+  `isValid()` kontrolünden geçiyor. Yani biçim doğru.
+- **Ama saat hiçbir SMA paketine cevap vermedi.** Denenenler: write with/without response,
+  bayrak 0x01/0x11/0x31/0x00, anahtar bayrağı READ/UPDATE/READ_CONTINUE, Jieli
+  doğrulamasından önce ve sonra, IDENTITY/SESSION el sıkışması, BLE eşleştirme.
+- Sonuç: ya bu model SMA kullanmıyor ya da bilinmeyen bir açılış paketi gerekiyor.
+
+## Jieli RCSP — saatte gerçekte ne var (tam tarama sonucu)
+
+`python qcy_client.py sweep` çıktısı:
+
+- `0x07 GET_SYS_INFO`: bütün gruplar status 0, ama sadece **grup 0x02 (RTC)** dolu:
+  cihazın dahili tarih/saati ve alarm zil listesi (UTF-8 "提示音" metinleri).
+  Grup 0xFF (PUBLIC): pil alanı `00`, dosya tipleri `MP1MP2MP3TMP`.
+- **Pil Jieli katmanında yok.** Saat %20 ve %50 gösterirken de `00` döndü.
+  `0xC1 ADV_GET_INFO` bütün maskelerde status 2. Parametre biçimi APK'dan doğrulandı
+  (`GetADVInfoParam` = 4 bayt BE maske), yani hata bizde değil, komut desteklenmiyor.
+- `0xA0 GET_HEALTH_DATA` bütün tiplerde status 2; APK'da bu komut için parametre sınıfı yok.
+- `0x02`, `0xD6`, `0xD9`, `0x29`, `0x31` → status 2. `0xD4 GET_DEV_MD5` → status 0, boş.
+- Windows saatin pilini gösterebiliyor ama bunu klasik Bluetooth (HFP) üzerinden alıyor,
+  BLE'den değil. Pili BLE'de aramak yanlış yol olabilir.
+
+## Dosya gezme (0x0C) — kabul ediliyor, depolama çevrimdışı
+
+- `StartFileBrowseParam` = `PathData.toData()`:
+  `tip(1) | okunacakAdet(1) | başlangıçİndeks(2,BE) | cihazTutamacı(4,BE) | yol(4×n,BE)`
+  (tip 0 = klasör, kök için yol=[0]).
+- Saat **status 0** dönüyor, hemen ardından kendisi `C0 0D` (STOP_FILE_BROWSE, sebep 01)
+  isteği gönderip gezinmeyi iptal ediyor; hiç öğe gelmiyor.
+- `FileBrowseManager` koduna göre bu "storage offline" demek: saatte çevrimiçi bir
+  depolama aygıtı (SDCardBean) yok. Bu gezgin muhtemelen müzik/SD için.
+
+## Protokol kuralı: saatin isteklerine cevap şart
+
+Saat de bize `FE DC BA C0 ...` (istek + cevap bekliyor) çerçeveleri gönderiyor.
+Cevapsız bırakılınca oturumu iptal ediyor. `qcy_client.GS2._ack()` her isteğe
+`FE DC BA 00 op 00 02 status SN EF` ile otomatik onay döner.
+
+## Windows / bleak tuzakları (zaman kaybettirdi)
+
+- GS2 çok seyrek reklam yayınlıyor (bazen 45 sn'de bir). Kısa `discover()` çağrıları
+  kaçırıyor; `find_device_by_address(..., timeout=60)` ile kesintisiz tarama şart.
+- WinRT bazen eksik GATT servis listesi döndürüyor → bağlan, karakteristikleri doğrula,
+  eksikse kop ve tekrar dene (`GS2.connect` bunu yapıyor).
+- `client.pair()` bozuk bir bağ bırakıp CCCD yazmayı "işlem iptal edildi" hatasıyla kırdı;
+  `client.unpair()` ile düzeldi. **pair() kullanma.**
+
 ## Sıradaki adımlar
 
-1. Pil sorgusunu (`07` / `FF 00000001`) gerçek saatte doğrula.
-2. `0x02` FEATURE_MAP ve `0xD6` EXTERNAL_FLASH_MSG parametrelerini APK'dan bul
-   (androguard ile ilgili `*Param` sınıflarının `getParamData()` metotları).
-3. `0x0C` START_FILE_BROWSE ile saatin klasörlerini listele.
-4. `0xA0` GET_HEALTH_DATA ile adım/nabız çek.
-5. Nordic UART (SMA) kanalını incele: saat ayarı, sağlık geçmişi.
-6. Kadran: mevcut kadranı indir, `bmp_convert` biçimini çöz.
+1. **Gerçek trafiği yakala.** Tahminle ilerlemek burada tıkandı. İki yol:
+   - Android telefon + QCY uygulaması + "Bluetooth HCI snoop log" (ücretsiz, en kesin).
+   - nRF52840 dongle ile BLE sniffer (iPhone trafiğini de yakalar).
+   Yakalanan trafik hangi kanalın ve hangi komutların kullanıldığını kesin gösterir.
+2. Pil için klasik Bluetooth (HFP) yolunu incele; Windows pili oradan okuyor.
+3. Kadran/dosya için EXT_FLASH yolu (WATCH_OP=3). Yazma komutları riskli, önce salt okunur.
 
 ## Güvenlik kuralları
 
