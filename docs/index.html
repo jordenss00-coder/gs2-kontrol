@@ -259,6 +259,12 @@ const TARGET_ATTR = {
   0x15: "Dosya aktarımı", 0x1F: "Özel sürüm",
 };
 // GET_SYS_INFO, PUBLIC (0xFF) grubu alan adları
+// CMD_ADV_GET_INFO (0xC1) alanları - APK'daki AttrAndFunCode ADV_TYPE_*
+const ADV_ATTR = {
+  0x00: "Pil", 0x01: "Cihaz adı", 0x02: "Tuş ayarları", 0x03: "LED ayarları",
+  0x04: "Mikrofon kanalı", 0x05: "Çalışma modu", 0x06: "Ürün bilgisi", 0x07: "Bağlı kalma süresi",
+  0x08: "Kulakta algılama", 0x09: "Dil", 0x0A: "ANC mod listesi",
+};
 const SYS_PUBLIC_ATTR = { 0x00: "Pil", 0x01: "Ses seviyesi", 0x02: "Müzik cihaz durumu", 0x03: "Hata", 0x04: "EQ", 0x05: "Dosya tipi", 0x06: "Aktif mod", 0x07: "Işık", 0x08: "FM verici" };
 
 // skip: TLV'den önce atlanacak bayt sayısı (sistem bilgisinde ilk bayt fonksiyon grubu)
@@ -274,7 +280,7 @@ function showResult(title, res, names = TARGET_ATTR, skip = 0) {
         v += "   → adres " + Array.from(addr, (x) => x.toString(16).padStart(2, "0")).join(":").toUpperCase();
       }
       const typeHex = `0x${it.type.toString(16).padStart(2, "0")}`;
-      if (names === SYS_PUBLIC_ATTR && it.type === 0x00 && it.value.length) {
+      if ((names === SYS_PUBLIC_ATTR || names === ADV_ATTR) && it.type === 0x00 && it.value.length) {
         v += `   → %${it.value[0]}`;
       }
       rows.push([names[it.type] ? `${names[it.type]} (${typeHex})` : `Tip ${typeHex}`, v, true]);
@@ -332,7 +338,9 @@ $("btnDisconnect").onclick = () => device?.gatt.disconnect();
 $("btnInfo").onclick = () => run("GET_TARGET_INFO (0x03)", 0x03, fromHex("FFFFFFFF00"));
 // Sistem bilgisi parametresi: [grup][4 baytlık alan maskesi, big-endian]. Grup 0xFF = PUBLIC.
 $("btnSys").onclick = () => run("GET_SYS_INFO (0x07)", 0x07, fromHex("FF000001FF"), SYS_PUBLIC_ATTR, 1);
-$("btnBattery").onclick = () => run("Pil (0x07, PUBLIC alan 0)", 0x07, fromHex("FF00000001"), SYS_PUBLIC_ATTR, 1);
+// 0xC1 GET_ADV_INFO parametresi: 4 baytlık big-endian maske (APK: GetADVInfoParam.getParamData)
+// Bit 0 = ADV_TYPE_BATTERY_QUANTITY. Saatte pil PUBLIC sistem bilgisinde boş dönüyor, ADV'de var.
+$("btnBattery").onclick = () => run("Pil (0xC1 ADV, maske 1)", 0xC1, fromHex("00000001"), ADV_ATTR);
 $("btnSend").onclick = () => {
   try {
     const op = parseInt($("op").value, 16);
